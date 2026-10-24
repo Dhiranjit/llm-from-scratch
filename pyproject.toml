@@ -1,19 +1,16 @@
 [project]
-name = "deep-learning-from-scratch"
+name = "llm-from-scratch"
 version = "0.1.0"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 dependencies = [
     "numpy",
     "matplotlib",
     "torch",
-    "regex",       # tokenizer/bpe.py
-    "tqdm",        # tokenizer + training loops
-    "datasets",    # scripts that pull FineWebEdu
+    "regex",       
+    "tqdm",        
+    "datasets", 
 ]
 
 [build-system]
-requires = ["setuptools>=61"]
-build-backend = "setuptools.build_meta"
-
-[tool.setuptools.packages.find]
-where = ["src"] 
+requires = ["uv_build>=0.11.28,<0.12.0"]
+build-backend = "uv_build"

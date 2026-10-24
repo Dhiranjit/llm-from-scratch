@@ -2,8 +2,8 @@ import sys
 import torch
 import argparse
 
-from src.gpt.model import GPT2, GPTConfig
-from src.tokenizer.bpe import BPETokenizer
+from src.llm_from_scratch.gpt.model import GPT2, GPTConfig
+from src.llm_from_scratch.tokenizer.bpe import BPETokenizer
 
 
 MAX_TOKENS = 1000   # hard safety cap; generation normally stops at <|endoftext|>

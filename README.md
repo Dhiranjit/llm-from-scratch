@@ -1,4 +1,4 @@
-# GPT from Scratch
+# LLM from scatch
 
 A personal learning journey building neural networks from the ground up — no shortcuts, mostly from scratch.
 
@@ -9,15 +9,19 @@ Follows the progression from a simple character-level bigram model all the way t
 ## The Journey
 
 ### 1. Bigram Model
+
 A character-level bigram language model trained on names. Predicts the next character purely from the current one using a learned lookup table. The simplest possible baseline.
 
 ### 2. MLP (Makemore)
+
 A multi-layer perceptron that takes a fixed context window of characters and predicts the next one. Introduces embeddings, hidden layers, and backpropagation through a proper neural net.
 
 ### 3. WaveNet-style Model
+
 A deeper architecture with dilated causal convolutions, inspired by WaveNet. Increases the effective receptive field without the cost of a full transformer.
 
 ### 4. GPT
+
 A decoder-only transformer (GPT-style) trained on the tiny Shakespeare dataset. Self-attention, positional embeddings, and multi-head attention — all implemented from scratch.
 
 ---

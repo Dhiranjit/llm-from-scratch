@@ -2,7 +2,7 @@ import argparse
 import numpy as np
 
 from pathlib import Path
-from src.tokenizer.bpe import BPETokenizer
+from src.llm_from_scratch.tokenizer.bpe import BPETokenizer
 
 ROOT = Path(__file__).resolve().parents[1]
 

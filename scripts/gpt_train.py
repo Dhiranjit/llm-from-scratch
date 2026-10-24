@@ -5,7 +5,7 @@ import argparse
 import numpy as np
 from tqdm import tqdm
 
-from src.gpt.model import GPT2, GPTConfig
+from src.llm_from_scratch.gpt.model import GPT2, GPTConfig
 from tokenizer.bpe import BPETokenizer
 
 

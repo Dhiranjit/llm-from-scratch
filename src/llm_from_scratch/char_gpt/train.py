@@ -5,7 +5,7 @@ from pathlib import Path
 from dataclasses import dataclass
 from tqdm import tqdm
 
-from src.char_gpt.model import GPT
+from src.llm_from_scratch.char_gpt.model import GPT
 
 
 # =============================================================================
