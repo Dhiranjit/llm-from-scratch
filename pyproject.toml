@@ -1,16 +1,30 @@
 [project]
 name = "llm-from-scratch"
 version = "0.1.0"
+description = "Building neural networks from Bigram to GPT from scratch"
+readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "numpy",
     "matplotlib",
     "torch",
-    "regex",       
-    "tqdm",        
-    "datasets", 
+    "regex",
+    "tqdm",
+    "ipykernel>=7.4.0",
+    "pandas>=3.1.0",
+    "scipy>=1.18.1",
+    "ipywidgets>=8.1.9",
 ]
 
 [build-system]
-requires = ["uv_build>=0.11.28,<0.12.0"]
-build-backend = "uv_build"
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[dependency-groups]
+dev = [
+    "ruff>=0.17.2",
+]
+
+[project.scripts]
+train-char = "llm_from_scratch.char_gpt.train:main"
+generate-char = "llm_from_scratch.char_gpt.generate:main"

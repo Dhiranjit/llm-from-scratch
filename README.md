@@ -1,3 +1,5 @@
+##
+
 # LLM from scatch
 
 A personal learning journey building neural networks from the ground up — no shortcuts, mostly from scratch.
@@ -62,13 +64,7 @@ deep-learning-from-scratch/
 
 ---
 
-## Setup
-
-```bash
-pip install -e .
-```
-
-Requires Python >= 3.11. Dependencies: `numpy`, `matplotlib`, `torch`.
+##
 
 ---
 

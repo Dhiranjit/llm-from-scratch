@@ -1,155 +1,133 @@
-import os
+import sys
 import torch
-import argparse
 from pathlib import Path
-from dataclasses import dataclass
-from tqdm import tqdm
-
-from src.llm_from_scratch.char_gpt.model import GPT
+from llm_from_scratch.char_gpt.model import CausalSelfAttentionModel
 
 
-# =============================================================================
-# Config
-# =============================================================================
 
-@dataclass
-class GPTConfig:
-    # model
-    n_embed:    int   = 192
-    n_head:     int   = 6
-    n_layers:   int   = 6
-    block_size: int   = 256
-    dropout:    float = 0.2
-    # training
-    max_steps:  int   = 3000
-    batch_size: int   = 64
-    eval_iters: int   = 30
-    lr:         float = 3e-4
+# Hyperparameters
+batch_size = 32
+block_size = 256
+n_embd = 384
+n_head = 6
+n_layers = 6
+dropout = 0.2
+lr = 3e-4
+
+max_steps = 6000
+eval_interval = 500
 
 
-# =============================================================================
-# Data
-# =============================================================================
-
-@dataclass
-class Dataset:
-    train: torch.Tensor
-    val:   torch.Tensor
-    itos:  dict
-    vocab_size: int
+device = "cuda" if torch.cuda.is_available() else "cpu"
+print(f"Using device: {device}")
 
 
-def load_dataset(path: str | Path):
-    with open(path, 'r', encoding='UTF-8') as f:
-        text = f.read()
-
-    chars = sorted(set(text))
-    stoi  = {s: i for i, s in enumerate(chars)}
-    itos  = {i: s for s, i in stoi.items()}
-    data  = torch.tensor([stoi[c] for c in text], dtype=torch.long)
-    n     = int(0.9 * len(data))
-    return Dataset(data[:n], data[n:], itos, len(chars))
+ROOT_DIR = Path(__file__).resolve().parents[3]
+DATA_PATH = ROOT_DIR / "data" / "tiny_shakespeare.txt"
+CKPT_DIR = ROOT_DIR / "checkpoints"
+CKPT_DIR.mkdir(parents=True, exist_ok=True)
+CKPT_PATH = CKPT_DIR / "char_gpt.pt"
 
 
-def get_batch(ds, split, cfg: GPTConfig, device):
-    data = ds.train if split == "train" else ds.val
-    ix   = torch.randint(0, len(data) - cfg.block_size, (cfg.batch_size,))
-    xb   = torch.stack([data[i:i + cfg.block_size]     for i in ix])
-    yb   = torch.stack([data[i+1:i + cfg.block_size+1] for i in ix])
-    return xb.to(device), yb.to(device)
+text = DATA_PATH.read_text("utf-8")
+print(f"Text loaded from {DATA_PATH}")
+
+chars = sorted(list(set(text)))
+vocab_size = len(chars)
+
+stoi = {s: i for i, s in enumerate(chars)}
+itos = {i: s for s, i in stoi.items()}
+
+encode = lambda s: [stoi[c] for c in s]
+decode = lambda l: "".join(itos[i] for i in l)
 
 
-# =============================================================================
-# Eval
-# =============================================================================
+# Loading data
+data = torch.tensor(encode(text), dtype=torch.long, device=device)
 
-@torch.no_grad()
-def estimate_loss(model, ds, cfg: GPTConfig, device):
+# Splitting into train and val set
+n = int(0.9 * len(data))
+train_data = data[:n]
+val_data = data[n:]
+
+
+def get_batch(split, batch_size, block_size):
+    data = train_data if split == "train" else val_data
+    ix = torch.randint(0, len(data) - block_size, (batch_size, ), device=device)
+    offsets = torch.arange(block_size, device=device)
+    xb = data[ix[:, None] + offsets]
+    yb = data[ix[:, None] + offsets + 1]
+
+    return xb, yb
+
+
+@torch.inference_mode()
+def estimate_loss(model, eval_iters=100):
     model.eval()
-    results = {}
+    out = {}
     for split in ["train", "val"]:
-        losses = torch.zeros(cfg.eval_iters)
-        for k in range(cfg.eval_iters):
-            xb, yb = get_batch(ds, split, cfg, device)
+        losses = torch.zeros(eval_iters)
+        for k in range(eval_iters):
+            xb, yb = get_batch(split, batch_size, block_size)
             _, loss = model(xb, yb)
-            losses[k] = loss.detach()
-        results[split] = losses.mean().item()
+            losses[k] = loss.item()
+        out[split] = losses.mean().item()
     model.train()
-    return results["train"], results["val"]
+    return out
 
 
-# =============================================================================
-# Training
-# =============================================================================
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--max-steps", type=int, default=6000)
-    args = parser.parse_args()
-
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    cfg    = GPTConfig(max_steps=args.max_steps)
-
-    os.makedirs("models", exist_ok=True)
-    model_path = Path(__file__).parents[2] / "data/tiny_shakespeare.txt"
-    ds    = load_dataset(model_path)
-    model = GPT(
-        vocab_size=ds.vocab_size,
-        n_embed=cfg.n_embed,
-        n_head=cfg.n_head,
-        n_layers=cfg.n_layers,
-        block_size=cfg.block_size,
-        dropout=cfg.dropout,
+def main():
+    # Initializing the model
+    model = CausalSelfAttentionModel(
+        vocab_size=vocab_size,
+        n_embd=n_embd,
+        n_head=n_head,
+        n_layers=n_layers,
+        block_size=block_size,
+        dropout=dropout,
     ).to(device)
 
-    param_count = sum(p.numel() for p in model.parameters())
-    print("=" * 45)
-    print(f"  GPT Model")
-    print("=" * 45)
-    print(f"  vocab_size : {ds.vocab_size}")
-    print(f"  n_embed    : {cfg.n_embed}")
-    print(f"  n_head     : {cfg.n_head}")
-    print(f"  n_layers   : {cfg.n_layers}")
-    print(f"  block_size : {cfg.block_size}")
-    print(f"  dropout    : {cfg.dropout}")
-    print(f"  device     : {device}")
-    print("-" * 45)
-    print(f"  parameters : {param_count:,}")
-    print("=" * 45)
-    print()
+    print(f"Model parameters: {sum(p.numel() for p in model.parameters()) / 1e6:.2f}M")
+    
 
-    optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr)
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=cfg.max_steps, eta_min=3e-5)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
 
-    pbar = tqdm(range(cfg.max_steps), desc="Training", unit="step")
+    for i in range(max_steps):
 
-    for i in pbar:
-        xb, yb = get_batch(ds, "train", cfg, device)
-        optimizer.zero_grad()
-        _, loss = model(xb, yb)
+        if i % eval_interval == 0 or i == max_steps - 1:
+            losses = estimate_loss(model, eval_iters=50)
+            print(f" Step: {i:5d}/{max_steps} Train Loss: {losses['train']:.4f} | Val Loss: {losses['val']:.4f} ")
+
+        xb, yb = get_batch("train", batch_size, block_size)
+        logits, loss = model(xb, yb)
+        model.zero_grad()
         loss.backward()
         optimizer.step()
-        scheduler.step()
 
-        if i % 300 == 0 or i == cfg.max_steps - 1:
-            train_loss, val_loss = estimate_loss(model, ds, cfg, device)
-            tqdm.write(f"step {i:5d} | train: {train_loss:.4f} | val: {val_loss:.4f}")
+    # Final eval
+    final_losses = estimate_loss(model, eval_iters=500)
+    print(f"Final Train Loss: {final_losses['train']:.4f} Final Val Loss: {final_losses['val']:.4f}")
 
-        if i > 0 and i % 1000 == 0:
-            torch.save({
-                "model": model.state_dict(),
-                "itos":  ds.itos,
-                "model_config": dict(
-                    vocab_size=ds.vocab_size, n_embed=cfg.n_embed, n_head=cfg.n_head,
-                    n_layers=cfg.n_layers, block_size=cfg.block_size, dropout=cfg.dropout,
-                ),
-            }, f"models/gpt_{i}.pt")
+    # Model saving
+    torch.save(
+        {
+            "model_state_dict": model.state_dict(),
+            "stoi": stoi,
+            "itos": itos,
+            "config": {
+                "vocab_size": vocab_size,
+                "n_embd": n_embd,
+                "n_head": n_head,
+                "n_layers": n_layers,
+                "block_size": block_size,
+                "dropout": dropout,
+            },
+        },
+        CKPT_PATH,
+    )
+    print(f"Saved trained model to {CKPT_PATH}")
 
-    torch.save({
-        "model": model.state_dict(),
-        "itos":  ds.itos,
-        "model_config": dict(
-            vocab_size=ds.vocab_size, n_embed=cfg.n_embed, n_head=cfg.n_head,
-            n_layers=cfg.n_layers, block_size=cfg.block_size, dropout=cfg.dropout,
-        ),
-    }, "models/gpt_final.pt")
+
+if __name__ == "__main__":
+    main()

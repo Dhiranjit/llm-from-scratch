@@ -1,8 +1,7 @@
 from collections import Counter
-from tqdm import tqdm
 
 import regex as re
-
+from tqdm import tqdm
 
 # Patten used by GPT4
 GPT_SPLIT_PATTERN = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}{1,3}| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
@@ -177,8 +176,7 @@ class BPETokenizer:
     
     def save(self, path):
         with open(path, "w") as f:
-            for pair in self.merges:
-                f.write(f"{pair[0]} {pair[1]}\n")
+            f.writelines(f"{pair[0]} {pair[1]}\n" for pair in self.merges)
     
 
     def load(self, path):
