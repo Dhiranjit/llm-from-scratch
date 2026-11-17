@@ -1,201 +1,190 @@
+import json
 from collections import Counter
+from itertools import pairwise
+from pathlib import Path
 
 import regex as re
 from tqdm import tqdm
 
-# Patten used by GPT4
-GPT_SPLIT_PATTERN = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}{1,3}| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
+PATTERN = re.compile(r"'s|'t|'re|'ve|'m|'ll|'d| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+")
 
 
-# ===========================================================================
-# Helper
-# ===========================================================================
-
-
-def count_pairs(word_freqs):
-    """Count adjacent-pair frequencies using pre-computed word frequencies"""
-    pairs = Counter()
-    for word, freq in word_freqs.items():
-        # word is a tuple of intergers, e.g., (32, 116, 104, 101)
-        for i in range(len(word) - 1):
-            pair = (word[i], word[i+1])
-            pairs[pair] += freq # Directly add the frequency of the word
-    return pairs
-
-
-def merge(word_freqs, pair, new_id):
-    """Replace all occurence of a `pair` with `new_id` across a word-frequency dict."""
-    new_word_freqs = Counter()
-    for word, freq in word_freqs.items():
-        if len(word) < 2 or pair[0] not in word:
-            new_word_freqs[word] += freq
-            continue
-
-        new_word = []
-        i = 0
-        while i < len(word):
-            if i < len(word) - 1 and word[i] == pair[0] and word[i+1] == pair[1]:
-                new_word.append(new_id)
-                i += 2
-            else:
-                new_word.append(word[i])
-                i += 1
-        new_word_freqs[tuple(new_word)] += freq
-    return new_word_freqs
-
-
-# ===========================================================================
-# Tokenizer
-# ===========================================================================
+def _merge(tokens: list[int], pair: tuple[int, int], new_token: int) -> list[int]:
+    """Replace all occurrences of pair with new_token in a new list."""
+    new_tokens = []
+    i = 0
+    while i < len(tokens):
+        if i < len(tokens) - 1 and tokens[i] == pair[0] and tokens[i + 1] == pair[1]:
+            new_tokens.append(new_token)
+            i += 2
+        else:
+            new_tokens.append(tokens[i])
+            i += 1
+    return new_tokens
 
 
 class BPETokenizer:
+    """Byte-level BPE tokenizer with regex pre-tokenization and special token support."""
 
-    def __init__(self, special_tokens=None):
-        self.pattern = re.compile(GPT_SPLIT_PATTERN)
-        self.merges = {}
-        self.special_tokens = list(special_tokens or [])
-        self.vocab = self._build_vocab()
-    
+    def __init__(self, pattern: re.Pattern = PATTERN) -> None:
+        self.pattern = pattern
+        self.merges: dict[tuple[int, int], int] = {}
+        self.special_tokens: dict[str, int] = {}
+        self.vocab: dict[int, bytes] = {}
+        self._trained = False
 
-    def _chunk(self, text):
-        """Split text on the pattern, then UTF-8 encode each piece to byte-id list."""
-        return [list(piece.encode("utf-8")) for piece in self.pattern.findall(text)]
-
-    
-    def _build_vocab(self):
-        """Rebuild vocab from base bytes + merges. (After the merges is created from the merges.txt)"""
+    def _build_vocab(self) -> dict[int, bytes]:
         vocab = {i: bytes([i]) for i in range(256)}
         for (p0, p1), new_id in self.merges.items():
             vocab[new_id] = vocab[p0] + vocab[p1]
-        
-        base = 256 + len(self.merges)
-        self.stoi = {tok: base + j for j, tok in enumerate(self.special_tokens)}
-
-        for tok, id in self.stoi.items():
-            vocab[id] = tok.encode("utf-8")
+        for tok, idx in self.special_tokens.items():
+            vocab[idx] = tok.encode("utf-8")
         return vocab
 
+    def _require_trained(self) -> None:
+        if not self._trained:
+            raise RuntimeError("Tokenizer is not trained. Call train() or from_file() first.")
 
-    def _split_special(self, text):
-        """Split text on special tokens, keeping the delimiters. Returns a list of pieces."""
-        if not self.special_tokens:
-            return [text]
-        special_pattern = "(" + "|".join(re.escape(s) for s in self.special_tokens) + ")"
-        return re.split(special_pattern, text)
+    @property
+    def vocab_size(self) -> int:
+        """Total vocab size: 256 base bytes + learned merges + special tokens."""
+        return len(self.vocab)
 
+    def token_to_id(self, token: str) -> int | None:
+        """Look up ID for a special token or UTF-8 token string; None if absent."""
+        if token in self.special_tokens:
+            return self.special_tokens[token]
+        target = token.encode("utf-8")
+        return next((idx for idx, b in self.vocab.items() if b == target), None)
 
-    def train(self, text: str, vocab_size, verbose=True):
-        assert vocab_size >= 256
+    def id_to_token(self, idx: int) -> bytes | None:
+        """Look up raw byte sequence for a token ID; None if out of range."""
+        return self.vocab.get(idx)
 
-        # Strip special tokens so their bytes never enter the merge statistics.
-        ordinary = [p for p in self._split_special(text) if p not in self.special_tokens]
+    def train(
+        self,
+        file: str | Path,
+        vocab_size: int = 4096,
+        special_tokens: list[str] | None = None,
+        verbose: bool = True,
+    ) -> None:
+        """Train BPE merges from a UTF-8 text file."""
+        special_tokens = ["<|endoftext|>"] if special_tokens is None else special_tokens
+        num_merges = vocab_size - 256 - len(special_tokens)
+        if num_merges < 0:
+            raise ValueError(
+                f"vocab_size ({vocab_size}) must be at least {256 + len(special_tokens)}."
+            )
 
-        # Get raw chunks
-        raw_chunks = [c for piece in ordinary for c in self._chunk(piece)]
-        original_len = sum(len(c) for c in raw_chunks)
-        
+        text = Path(file).read_text("utf-8")
+        word_counts = Counter()
 
-        word_freqs = Counter(tuple(chunk) for chunk in raw_chunks)
+        if special_tokens:
+            special_pattern = "|".join(re.escape(k) for k in special_tokens)
+            docs = re.split(special_pattern, text)
+        else:
+            docs = [text]
 
-        merges = {}
-        iterator = tqdm(range(vocab_size - 256), desc="BPE Training", unit="merges", disable=not verbose)
+        for doc in docs:
+            if doc:
+                word_counts.update(self.pattern.findall(doc))
 
-        for i in iterator:
-            counts = count_pairs(word_freqs)
-            if not counts:
+        words = [[list(w.encode("utf-8")), freq] for w, freq in word_counts.items()]
+        original_length = sum(len(t) * freq for t, freq in words)
+        merges: dict[tuple[int, int], int] = {}
+        pbar = tqdm(range(num_merges), desc="BPE Training", unit="merge", disable=not verbose)
+
+        for i in pbar:
+            # 1. Count adjacent pairs weighted by word frequency
+            pair_counts: Counter[tuple[int, int]] = Counter()
+            for tokens, freq in words:
+                for pair in pairwise(tokens):
+                    pair_counts[pair] += freq
+            if not pair_counts:
                 break
-            pair = max(counts, key=counts.get) # type: ignore
-            new_id = 256 + i
-            word_freqs = merge(word_freqs, pair, new_id)
-            merges[pair] = new_id
-        
-        merged_len = sum(len(word) * freq for word, freq in word_freqs.items())
-        
-        print(f"Compression Ratio: {original_len / merged_len:.2f}X")
 
+            # 2. Pick top pair & record merge
+            pair = max(pair_counts, key=pair_counts.get)  # type: ignore[arg-type]
+            new_token = 256 + i
+            merges[pair] = new_token
+
+            # 3. Merge inside each unique word
+            for item in words:
+                if len(item[0]) >= 2 and pair[0] in item[0]:
+                    item[0] = _merge(item[0], pair, new_token)
+
+            if i % 100 == 0:
+                total_tokens = sum(len(t) * freq for t, freq in words)
+                pbar.set_postfix(ratio=f"{original_length / total_tokens:.2f}x")
+
+        base = 256 + len(merges)
         self.merges = merges
+        self.special_tokens = {tok: base + j for j, tok in enumerate(special_tokens)}
         self.vocab = self._build_vocab()
-    
+        self._trained = True
 
-    def encode(self, text, verbose=True):
-        if not self.special_tokens:
-            return self._encode_ordinary(text)
-
-        ids = []
-        pieces = self._split_special(text)
-        iterator = tqdm(pieces, desc="Encoding", disable=not verbose)
-
-        for piece in iterator:
-            if piece in self.special_tokens:
-                ids.append(self.stoi[piece])   # atomic: one ID, no BPE
-            else:
-                ids.extend(self._encode_ordinary(piece)) # normal pipeline
-        return ids
-
-    def _encode_ordinary(self, text):
-        """The old encode: regex-chunk + per-chunk BPE. No special tokens."""
-        ids = []
-        for chunk in self._chunk(text):
-            ids.extend(self._encode_chunk(chunk))
-        return ids
-
-
-    def _encode_chunk(self, ids):
-        """Greedily apply merges to a single byte-id sequence, lowest rank first."""
-        while len(ids) >= 2:
-            pairs = set(zip(ids, ids[1:]))
-            pair = min(pairs, key=lambda p: self.merges.get(p, float("inf")))
+    def _encode_chunk(self, chunk: str) -> list[int]:
+        tokens = list(chunk.encode("utf-8"))
+        while len(tokens) >= 2:
+            # Apply the earliest-learned merge first (lowest ID in merges)
+            pair = min(pairwise(tokens), key=lambda p: self.merges.get(p, float("inf")))
             if pair not in self.merges:
                 break
-            new_id = self.merges[pair]
-            new_ids = []
-            i = 0
-            while i < len(ids):
-                if i < len(ids) - 1 and (ids[i], ids[i+1]) == pair:
-                    new_ids.append(new_id)
-                    i += 2
-                else:
-                    new_ids.append(ids[i])
-                    i += 1
-            ids = new_ids
+            tokens = _merge(tokens, pair, self.merges[pair])
+        return tokens
+
+    def encode(self, text: str) -> list[int]:
+        """Encode a single string into token IDs (recognizes registered special tokens)."""
+        self._require_trained()
+        if self.special_tokens:
+            special_pattern = "(" + "|".join(re.escape(k) for k in self.special_tokens) + ")"
+            parts = re.split(special_pattern, text)
+        else:
+            parts = [text]
+
+        cache: dict[str, list[int]] = {}
+        ids: list[int] = []
+        for part in parts:
+            if not part:
+                continue
+            if part in self.special_tokens:
+                ids.append(self.special_tokens[part])
+            else:
+                for chunk in self.pattern.findall(part):
+                    if chunk not in cache:
+                        cache[chunk] = self._encode_chunk(chunk)
+                    ids.extend(cache[chunk])
         return ids
 
-    def decode(self, ids):
-        text = b"".join([self.vocab[idx] for idx in ids]).decode("utf-8", errors="replace")
-        return text
-    
+    def decode(self, ids: list[int], skip_special_tokens: bool = False) -> str:
+        """Decode token IDs back into a UTF-8 string."""
+        self._require_trained()
+        if skip_special_tokens and self.special_tokens:
+            special_ids = set(self.special_tokens.values())
+            ids = [i for i in ids if i not in special_ids]
+        return b"".join(self.vocab[i] for i in ids).decode("utf-8", errors="replace")
 
-    def show_merges(self):
-        for (p0, p1), new_id in self.merges.items():
-            s0  = self.vocab[p0].decode("utf-8", errors="replace")
-            s1  = self.vocab[p1].decode("utf-8", errors="replace")
-            out = self.vocab[new_id].decode("utf-8", errors="replace")
-            print(f"{new_id}: {s0!r} + {s1!r} -> {out!r}")
-    
-    
-    def save(self, path):
-        with open(path, "w") as f:
-            f.writelines(f"{pair[0]} {pair[1]}\n" for pair in self.merges)
-    
+    def save(self, path: str | Path) -> None:
+        """Save pattern, merges, and special_tokens to a single tokenizer.json."""
+        self._require_trained()
+        out_path = Path(path)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        data = {
+            "pattern": self.pattern.pattern,
+            "merges": [[p0, p1, new_id] for (p0, p1), new_id in self.merges.items()],
+            "special_tokens": self.special_tokens,
+        }
+        out_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
-    def load(self, path):
-        merges = {}
-        with open(path, "r") as f:
-            for i, line, in enumerate(f):
-                p0, p1 = map(int, line.split())
-                merges[(p0, p1)] = 256 + i
-        
-        self.merges = merges
-        self.vocab = self._build_vocab()
-        return self
-
-
-    
-
-    
-         
-    
-
-    
-
+    @classmethod
+    def from_file(cls, path: str | Path) -> "BPETokenizer":
+        """Load a trained BPETokenizer from tokenizer.json."""
+        data = json.loads(Path(path).read_text(encoding="utf-8"))
+        tokenizer = cls(pattern=re.compile(data["pattern"]))
+        tokenizer.merges = {(int(p0), int(p1)): int(new_id) for p0, p1, new_id in data["merges"]}
+        tokenizer.special_tokens = {
+            tok: int(idx) for tok, idx in data.get("special_tokens", {}).items()
+        }
+        tokenizer.vocab = tokenizer._build_vocab()
+        tokenizer._trained = True
+        return tokenizer

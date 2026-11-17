@@ -24,7 +24,3 @@ build-backend = "hatchling.build"
 dev = [
     "ruff>=0.17.2",
 ]
-
-[project.scripts]
-train-char = "llm_from_scratch.char_gpt.train:main"
-generate-char = "llm_from_scratch.char_gpt.generate:main"

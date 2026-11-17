@@ -1,10 +1,13 @@
-### Code Analysis Policy
+# AGENTS.md
 
-Unless runtime execution is explicitly requested or strictly necessary, always prefer static analysis and mental walkthroughs. Do not spin up virtual environments, run verification scripts, or execute commands just to explain code, trace logic, or answer "what does this do" questions. Inspect and reason through the code statically.
+## Core Constraints
 
-### Jupyter Notebook (.ipynb) Policy
+- **Static Analysis Only (No Execution):** Never run shell commands, execute scripts, spin up environments, or run test suites. Reason through code statically—assume I will handle runtime verification myself.
+- **Targeted Context Only (No Broad Scanning):** Start from the files and context I provide. You may list directories and inspect directly imported or referenced files when needed for types, interfaces, or dependencies, but do not read unrelated files across the repo or inspect data files unless I explicitly point you to them.
+- **Minimal Scope:** Modify only what is directly required for the immediate request. Avoid unsolicited refactoring, reformatting of untouched code, or speculative abstractions (YAGNI).
 
-- Avoid raw text/JSON edits on `.ipynb` files whenever possible.
-- If modifying a notebook is required, use specialized tooling:
-  - Prefer using a dedicated CLI/Python script with `nbformat` (or `jupytext`) to safely read, modify cell source, and serialize back to valid JSON.
-  - Alternatively, if exploring or prototyping, convert the notebook to a plain Python script (`jupytext --to py:percent <file>.ipynb`), perform edits cleanly on Python code, and sync it back.
+## Workflow & Communication
+
+- **Simple/Local Tasks:** Execute immediately without preamble or ceremony.
+- **Architectural / Multi-File Changes:** Before writing code, briefly outline the plan in plain language and wait for my approval. Focus on **system flow, state movement, and behavioral impact**—do not list file-by-file or line-by-line diffs.
+- **Tone:** Keep explanations concise, direct, and grounded in substance. Do not gloss over critical logic, but skip filler.

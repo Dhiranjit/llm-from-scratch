@@ -5,6 +5,7 @@ from llm_from_scratch.char_gpt.model import CausalSelfAttentionModel
 
 
 
+
 # Hyperparameters
 batch_size = 32
 block_size = 256

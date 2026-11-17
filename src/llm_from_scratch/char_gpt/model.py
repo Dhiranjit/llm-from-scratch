@@ -25,16 +25,16 @@ class MultiHeadAttention(nn.Module):
         B, T, C = x.shape
         q, k, v = self.qkv(x).split(C, dim=-1) # (B, T, 3 * C) -> (B, T, C)
 
-        q = q.reshape(B, T, self.n_head, self.head_size).transpose(1, 2) # (B, n_head, T, head_size)
-        k = k.reshape(B, T, self.n_head, self.head_size).transpose(1, 2) # (B, n_head, T, head_size)
-        v = v.reshape(B, T, self.n_head, self.head_size).transpose(1, 2) # (B, n_head, T, head_size)
+        q = q.reshape(B, T, self.n_head, self.head_size).transpose(1, 2) # (B, nh, T, hs)
+        k = k.reshape(B, T, self.n_head, self.head_size).transpose(1, 2) # (B, nh, T, hs)
+        v = v.reshape(B, T, self.n_head, self.head_size).transpose(1, 2) # (B, nh, T, hs)
 
-        wei = (q @ k.transpose(-2, -1)) * (self.head_size ** -0.5) # (B, n_head, T, T)
+        wei = (q @ k.transpose(-2, -1)) * (self.head_size ** -0.5) # (B, nh, T, T)
         wei = wei.masked_fill(self.tril[:, :, :T, :T] == 0, float("-inf"))
         wei = F.softmax(wei, dim=-1)
         wei = self.attn_dropout(wei)
 
-        out = wei @ v # (B, n_head, T, T) @ (B, n_head, T, head_size) -> (B, n_head, T, head_size)
+        out = wei @ v # (B, nh, T, T) @ (B, nh, T, hs) -> (B, nh, T, hs)
         out = out.transpose(1, 2).reshape(B, T, C)
         out = self.resid_dropout(self.proj(out))
         return out
